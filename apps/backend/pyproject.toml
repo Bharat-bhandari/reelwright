@@ -1,0 +1,14 @@
+[project]
+name = "reelwright-backend"
+version = "0.1.0"
+description = "Reelwright backend - AI-powered video ad generator from product URLs"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.135.2",
+    "langchain-groq>=1.1.2",
+    "langgraph>=1.1.3",
+    "langgraph-cli[inmem]>=0.4.19",
+    "python-dotenv>=1.2.2",
+    "uvicorn>=0.42.0",
+]
