@@ -5,6 +5,8 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.agent import router as agent_router
+
 app = FastAPI()
 
 load_dotenv()
@@ -32,6 +34,9 @@ app.add_middleware(
 @app.get("/health")
 async def health():
     return {"status": "ok", "service": "reelwright-backend"}
+
+
+app.include_router(agent_router, prefix="/agent", tags=["agent"])
 
 
 if __name__ == "__main__":
