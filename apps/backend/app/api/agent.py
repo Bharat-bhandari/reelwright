@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from uuid import uuid4
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
@@ -30,8 +31,15 @@ class DirectionRequest(BaseModel):
 
 async def _run_graph_until_interrupt_or_end(thread_id: str, initial_state: AgentState | None) -> None:
     config = {"configurable": {"thread_id": thread_id}}
-    async for _ in graph.astream(initial_state, config, stream_mode="updates"):
-        pass
+    try:
+        async for _ in graph.astream(initial_state, config, stream_mode="updates"):
+            pass
+    except Exception as exc:  # noqa: BLE001
+        # Persist the crash into graph state so the SSE stream can surface it
+        try:
+            await graph.aupdate_state(config, {"error": str(exc)})
+        except Exception:  # noqa: BLE001
+            pass  # If state update also fails, the SSE loop will time-out naturally
 
 
 @router.post("/run")
@@ -137,7 +145,7 @@ async def stream_agent(thread_id: str):
                 seen.add(key)
                 yield {
                     "event": "status",
-                    "data": jsonable_encoder(message),
+                    "data": json.dumps(jsonable_encoder(message)),
                 }
 
         try:
@@ -148,7 +156,7 @@ async def stream_agent(thread_id: str):
             if snapshot.values and snapshot.values.get("final_video_url"):
                 yield {
                     "event": "complete",
-                    "data": jsonable_encoder({"final_video_url": snapshot.values["final_video_url"]}),
+                    "data": json.dumps(jsonable_encoder({"final_video_url": snapshot.values["final_video_url"]})),
                 }
                 return
 
@@ -164,7 +172,7 @@ async def stream_agent(thread_id: str):
                         seen.add(key)
                         yield {
                             "event": "status",
-                            "data": jsonable_encoder(message),
+                            "data": json.dumps(jsonable_encoder(message)),
                         }
                 except TimeoutError:
                     pass
@@ -172,12 +180,24 @@ async def stream_agent(thread_id: str):
                 latest_snapshot = await graph.aget_state(config)
                 async for event in emit_unseen_from_state(latest_snapshot.values):
                     yield event
-                if latest_snapshot.values and latest_snapshot.values.get("final_video_url"):
+
+                state_vals = latest_snapshot.values or {}
+
+                # Terminal: graph finished successfully
+                if state_vals.get("final_video_url"):
                     yield {
                         "event": "complete",
-                        "data": jsonable_encoder(
-                            {"final_video_url": latest_snapshot.values.get("final_video_url")}
-                        ),
+                        "data": json.dumps(jsonable_encoder(
+                            {"final_video_url": state_vals["final_video_url"]}
+                        )),
+                    }
+                    break
+
+                # Terminal: graph crashed (error set, nothing left to run)
+                if state_vals.get("error") and not list(latest_snapshot.next):
+                    yield {
+                        "event": "error",
+                        "data": json.dumps(jsonable_encoder({"error": state_vals["error"]})),
                     }
                     break
         finally:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import tempfile
@@ -70,7 +71,7 @@ async def assemble_node(state: AgentState) -> AgentState:
             await _download_to_file(url, local_path)
             local_paths.append(local_path)
 
-        ffmpeg.concat_videos(local_paths, output_path)
+        await asyncio.to_thread(ffmpeg.concat_videos, local_paths, output_path)
 
     base_url = _resolve_output_url()
     state["voiceover_url"] = None

@@ -13,7 +13,7 @@ from app.models.schemas import CritiqueResult, ScrapeData, VideoPlan
 logger = logging.getLogger(__name__)
 
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
-DEFAULT_MODEL = "llama-3.1-8b-instant"
+DEFAULT_MODEL = "llama-3.3-70b-versatile"
 
 
 def _get_api_key() -> str:
@@ -89,16 +89,36 @@ async def generate_video_plan(
 	}
 
 	system = (
-		"You are a creative director and ad copywriter. Return only valid JSON that matches the schema. "
-		"No markdown or extra keys. Write a punchy, benefit-led hook (6-12 words). Use concrete visual details, active verbs, and sensory language. "
-		"Prefer exactly 3 shots totaling ~12 seconds. Each shot must include a brief, specific description, an image-generation-ready `image_prompt`, and a `motion_prompt` describing camera movement. "
-		"Voiceover should be natural and conversational (1-2 short sentences) and match the product tone.")
+		"You are a world-class creative director and D2C ad strategist. "
+		"Your job is to turn product scrape data into a cinematic 3-shot 9:16 vertical ad plan. "
+		"Return ONLY valid JSON that exactly matches the schema — no markdown fences, no extra keys, no commentary. "
+		"Rules: "
+		"(1) Hook must be punchy and benefit-led, 6-12 words, present tense, active voice. "
+		"(2) Plan exactly 3 shots totaling 10-14 seconds. "
+		"(3) Each image_prompt must be self-contained for an image-gen model: specify subject, framing (close-up/wide/overhead), "
+		"lighting (soft diffused/studio rim/golden hour), background, texture details, and aspect ratio (9:16 vertical). "
+		"(4) If product images are provided in the scrape data, anchor each shot composition to the most relevant image URL — reference its angle, color palette, and surface texture. "
+		"(5) motion_prompt must be a short camera instruction (e.g., 'slow dolly-in on product', 'pan left revealing background'). "
+		"(6) Voiceover must be 1-2 short spoken sentences, natural cadence, brand-appropriate tone."
+	)
+
+	# Build a compact image-anchor section if images were scraped
+	image_anchors = ""
+	if scrape_data.product_images:
+		first_three = scrape_data.product_images[:3]
+		image_anchors = (
+			f"\n\nReference images (use these as compositional anchors for image_prompt fields):\n"
+			+ "\n".join(f"  - {url}" for url in first_three)
+		)
 
 	user = (
-		"Create a short 3-shot social ad plan from the product scrape data. Use the brand name and any concrete details from the scrape (product copy, features, materials, textures, and image examples) to make the hook and shots specific to the product. "
-		"Keep total duration around 12 seconds (e.g., 4s + 4s + 4s) and prefer active, visual verbs. For each shot provide camera framing, lighting, and a clear `image_prompt` suitable for image generation (style, lens, lighting, background). "
-		"Return only JSON that matches the schema below; do not add commentary or extra fields.\n\n"
-		f"Scrape data:\n{scrape_data.model_dump_json(indent=2)}\n\n"
+		"Create a 3-shot vertical (9:16) social ad plan from the product scrape data below. "
+		"Ground every shot's image_prompt in the actual product: use its real brand name, materials, colorways, textures, and any visible design details from the scrape. "
+		"Do NOT use generic placeholder descriptions — make every prompt visually specific and production-ready for an image-generation model. "
+		"Total duration: 10-14 seconds (e.g., 4s + 4s + 4s or 4s + 5s + 4s). "
+		"Return ONLY JSON matching the schema; do not add commentary or extra fields.\n\n"
+		f"Product scrape:\n{scrape_data.model_dump_json(indent=2)}"
+		f"{image_anchors}\n\n"
 		f"Schema:\n{json.dumps(plan_schema, indent=2)}"
 	)
 
@@ -106,7 +126,7 @@ async def generate_video_plan(
 		model=_get_model(model),
 		messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
 		temperature=0.6,
-		max_tokens=1200,
+		max_tokens=1600,
 	)
 	data = _extract_json_object(content)
 	return VideoPlan.model_validate(data)

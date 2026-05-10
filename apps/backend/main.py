@@ -3,9 +3,9 @@ from pathlib import Path
 
 import uvicorn
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 
 from app.api.agent import router as agent_router
 
@@ -42,7 +42,25 @@ app.include_router(agent_router, prefix="/agent", tags=["agent"])
 
 output_dir = Path("scratch") / "output"
 output_dir.mkdir(parents=True, exist_ok=True)
-app.mount("/output", StaticFiles(directory=str(output_dir)), name="output")
+
+
+@app.get("/output/{filename}")
+async def serve_output(filename: str):
+    """Serve generated MP4 files with explicit CORS headers so the frontend
+    can fetch them as a blob for download (cross-origin on :3004 → :8084)."""
+    file_path = output_dir / filename
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="File not found")
+    # Use first origin in CORS_ORIGINS (always the frontend dev server)
+    allow_origin = cors_origins[0] if cors_origins else "*"
+    return FileResponse(
+        file_path,
+        media_type="video/mp4",
+        headers={
+            "Access-Control-Allow-Origin": allow_origin,
+            "Access-Control-Expose-Headers": "Content-Length, Content-Disposition",
+        },
+    )
 
 
 if __name__ == "__main__":

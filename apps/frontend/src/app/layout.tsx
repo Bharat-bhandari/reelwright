@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
@@ -13,9 +13,15 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Reelwright",
+  title: "Reelwright — AI video ad generator",
   description:
-    "Reelwright turns any product URL into a short-form video ad using an AI agent.",
+    "Reelwright turns any D2C product URL into a 9:16 short-form video ad using an AI agent powered by Runway Gen-4 and Groq.",
+};
+
+export const viewport: Viewport = {
+  themeColor: "#09090b",
+  width: "device-width",
+  initialScale: 1,
 };
 
 export default function RootLayout({
@@ -26,9 +32,12 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      className={`${geistSans.variable} ${geistMono.variable}`}
+      style={{ background: "#09090b" }}
     >
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body style={{ minHeight: "100vh", display: "flex", flexDirection: "column" }}>
+        {children}
+      </body>
     </html>
   );
 }
