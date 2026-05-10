@@ -1,9 +1,11 @@
 import os
+from pathlib import Path
 
 import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from app.api.agent import router as agent_router
 
@@ -37,6 +39,10 @@ async def health():
 
 
 app.include_router(agent_router, prefix="/agent", tags=["agent"])
+
+output_dir = Path("scratch") / "output"
+output_dir.mkdir(parents=True, exist_ok=True)
+app.mount("/output", StaticFiles(directory=str(output_dir)), name="output")
 
 
 if __name__ == "__main__":

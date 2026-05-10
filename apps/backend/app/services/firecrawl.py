@@ -197,7 +197,7 @@ def _extract_copy_blocks(markdown: str) -> list[str]:
 
 async def _extract_dominant_colors(logo_url: str) -> list[str]:
 	try:
-		async with httpx.AsyncClient(timeout=30.0) as client:
+		async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
 			response = await client.get(logo_url)
 			response.raise_for_status()
 			image_bytes = response.content

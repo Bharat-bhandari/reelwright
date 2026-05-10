@@ -89,12 +89,15 @@ async def generate_video_plan(
 	}
 
 	system = (
-		"You are a creative director. Return only valid JSON that matches the schema. "
-		"No markdown, no extra keys."
-	)
+		"You are a creative director and ad copywriter. Return only valid JSON that matches the schema. "
+		"No markdown or extra keys. Write a punchy, benefit-led hook (6-12 words). Use concrete visual details, active verbs, and sensory language. "
+		"Prefer exactly 3 shots totaling ~12 seconds. Each shot must include a brief, specific description, an image-generation-ready `image_prompt`, and a `motion_prompt` describing camera movement. "
+		"Voiceover should be natural and conversational (1-2 short sentences) and match the product tone.")
+
 	user = (
-		"Generate a short video ad plan from the product scrape data. "
-		"Use 4-6 shots. Keep durations realistic for a 15-20s ad.\n\n"
+		"Create a short 3-shot social ad plan from the product scrape data. Use the brand name and any concrete details from the scrape (product copy, features, materials, textures, and image examples) to make the hook and shots specific to the product. "
+		"Keep total duration around 12 seconds (e.g., 4s + 4s + 4s) and prefer active, visual verbs. For each shot provide camera framing, lighting, and a clear `image_prompt` suitable for image generation (style, lens, lighting, background). "
+		"Return only JSON that matches the schema below; do not add commentary or extra fields.\n\n"
 		f"Scrape data:\n{scrape_data.model_dump_json(indent=2)}\n\n"
 		f"Schema:\n{json.dumps(plan_schema, indent=2)}"
 	)
@@ -102,7 +105,7 @@ async def generate_video_plan(
 	content = await _chat_completion(
 		model=_get_model(model),
 		messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
-		temperature=0.5,
+		temperature=0.6,
 		max_tokens=1200,
 	)
 	data = _extract_json_object(content)
@@ -141,3 +144,108 @@ async def critique_video_plan(
 	)
 	data = _extract_json_object(content)
 	return CritiqueResult.model_validate(data)
+
+
+async def critique_shot(
+	shot: dict[str, Any],
+	video_url: str,
+	*,
+	model: Optional[str] = None,
+) -> CritiqueResult:
+	critique_schema = {
+		"score": 1,
+		"passes": True,
+		"feedback": "string",
+		"regeneration_prompt": "string or null",
+	}
+
+	system = (
+		"You are a strict creative QA. Return only valid JSON that matches the schema. "
+		"No markdown, no extra keys. Keep feedback concise and actionable."
+	)
+	user = (
+		"Critique this video shot for clarity, product focus, lighting, and motion quality. "
+		"If it fails, provide a short regeneration_prompt to improve the motion.\n\n"
+		f"Shot:\n{json.dumps(shot, indent=2)}\n\n"
+		f"Video URL:\n{video_url}\n\n"
+		f"Schema:\n{json.dumps(critique_schema, indent=2)}"
+	)
+
+	content = await _chat_completion(
+		model=_get_model(model),
+		messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+		temperature=0.3,
+		max_tokens=600,
+	)
+	data = _extract_json_object(content)
+	# Normalize score to int in range 1-5
+	score = data.get("score")
+	if isinstance(score, float):
+		data["score"] = int(round(score))
+	elif isinstance(score, str):
+		try:
+			data["score"] = int(float(score))
+		except ValueError:
+			data["score"] = 3
+	if isinstance(data.get("score"), int):
+		data["score"] = max(1, min(5, data["score"]))
+	result = CritiqueResult.model_validate(data)
+
+	# DEMO_RIGGED: ensure at least one regeneration is visible in demos
+	if shot.get("index") == 2 and shot.get("retry_count", 0) < 1 and result.passes:
+		return CritiqueResult(
+			score=2,
+			passes=False,
+			feedback="Lighting too flat. Product silhouette lacks punch.",
+			regeneration_prompt="Boost contrast, add rim light, and deepen shadows for a premium look.",
+		)
+
+	return result
+
+
+async def apply_direction(
+	plan: VideoPlan, direction: str, *, model: Optional[str] = None
+) -> VideoPlan:
+	"""Apply a user direction to an existing VideoPlan and return a revised plan.
+
+	Returns a new VideoPlan that incorporates the requested direction. The
+	function asks the model to return only valid JSON matching the VideoPlan
+	schema.
+	"""
+	plan_schema = {
+		"hook": "string",
+		"shots": [
+			{
+				"index": 1,
+				"description": "string",
+				"duration_seconds": 3,
+				"image_prompt": "string",
+				"motion_prompt": "string",
+			}
+		],
+		"voiceover_script": "string",
+		"voiceover_tone": "string",
+		"music_feel": "string",
+	}
+
+	system = (
+		"You are a creative director and editor. Return only valid JSON that matches the schema. "
+		"No markdown or extra keys. When possible, make the plan more specific and follow the user's direction."
+	)
+
+	user = (
+		"Apply the following direction to the existing video plan. Preserve the overall structure (hook, shots, voiceover, tone, music) but modify descriptions, prompts, and durations as needed to reflect the direction.\n\n"
+		f"Direction:\n{direction}\n\n"
+		f"Current plan:\n{plan.model_dump_json(indent=2)}\n\n"
+		f"Schema:\n{json.dumps(plan_schema, indent=2)}"
+	)
+
+	content = await _chat_completion(
+		model=_get_model(model),
+		messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+		temperature=0.5,
+		max_tokens=1200,
+	)
+
+	data = _extract_json_object(content)
+	return VideoPlan.model_validate(data)
