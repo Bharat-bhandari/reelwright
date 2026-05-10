@@ -31,6 +31,13 @@ async def generate_shot_node(state: AgentState) -> AgentState:
     thread_id = state["thread_id"]
     use_cache = os.getenv("REELWRIGHT_USE_CACHE", "false").lower() in ("1", "true", "yes")
 
+    # A2: Extract reference images from scrape data for product fidelity
+    scrape_data = state.get("scrape")
+    reference_images = None
+    if scrape_data and scrape_data.product_images:
+        reference_images = scrape_data.product_images[:2]
+        logger.info("[generate_shot_node] Using %d reference images from scrape", len(reference_images))
+
     updated_shots: list[ShotState] = []
 
     for shot in state.get("shots", []):
@@ -47,7 +54,9 @@ async def generate_shot_node(state: AgentState) -> AgentState:
         state["shots"] = [*updated_shots, *state.get("shots", [])[len(updated_shots) :]]
 
         image_prompt = shot.get("image_prompt") or shot.get("description")
-        image_key = _hash_text(image_prompt)
+        # Include reference images in cache key so different references produce different cache entries
+        cache_input = image_prompt + "::" + str(reference_images or [])
+        image_key = _hash_text(cache_input)
         image_path, video_path = _cache_paths(thread_id, image_key)
 
         try:
@@ -56,7 +65,7 @@ async def generate_shot_node(state: AgentState) -> AgentState:
                 logger.info(f"[generate_shot_node] Using cached image for shot {shot_index}: {image_path}")
             else:
                 start = time.time()
-                urls = await runway.generate_image(image_prompt, ratio="720:1280")
+                urls = await runway.generate_image(image_prompt, ratio="720:1280", reference_images=reference_images)
                 duration = time.time() - start
                 image_url = urls[0]
                 logger.info(f"[generate_shot_node] Image generated for shot {shot_index} in {duration:.2f}s: {image_url}")

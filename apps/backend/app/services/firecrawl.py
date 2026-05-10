@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import logging
 import os
+import re
 from typing import Any, Iterable, List, Optional, Sequence
 
 import httpx
@@ -46,9 +47,44 @@ async def scrape_product(url: str) -> ScrapeData:
 	branding = _as_dict(data.get("branding"))
 	images = _as_list(data.get("images"))
 
+	# A1b: Firecrawl v1 does not return structured images.
+	# Extract image URLs from the markdown content as primary source.
+	if not images and markdown:
+		md_images = _extract_images_from_markdown(markdown)
+		logger.info("[firecrawl] Extracted %d images from markdown (structured images was empty)", len(md_images))
+		images = md_images
+
+	# Prioritize images that match the product URL slug.
+	# E.g., for /products/womens-wool-runner-go-dark-grey, prefer images
+	# with "wool-runner" in the URL over cross-sell socks images.
+	slug = url.rstrip("/").split("/")[-1].split("?")[0]  # e.g. "womens-wool-runner-go-dark-grey"
+	slug_parts = [p for p in slug.lower().replace("-", " ").split() if len(p) > 3]
+
+	def _image_relevance(img_url: str) -> int:
+		"""Lower score = more relevant to the product."""
+		url_lower = img_url.lower()
+		match_count = sum(1 for part in slug_parts if part in url_lower)
+		if match_count >= 2:
+			return 0  # Strong match — likely the actual product
+		if "pdp" in url_lower or "product" in url_lower:
+			return 1  # Product detail page image
+		if match_count == 1:
+			return 2  # Weak match
+		return 3  # No match — likely cross-sell or accessory
+
+	if isinstance(images, list) and images and slug_parts:
+		images = sorted(images, key=lambda img: _image_relevance(img if isinstance(img, str) else (img.get("url", "") if isinstance(img, dict) else "")))
+
 	logo_url = _pick_logo_url(metadata, branding, images)
 	brand_name = _pick_brand_name(metadata)
 	product_images = _pick_product_images(images)
+
+	# Also check OG image as fallback if no product images found.
+	if not product_images:
+		og_image = _as_str(metadata.get("og:image") or metadata.get("ogImage") or "")
+		if og_image:
+			product_images = [og_image]
+			logger.info("[firecrawl] Using OG image as fallback product image: %s", og_image[:120])
 	copy_blocks = _extract_copy_blocks(markdown)
 
 	dominant_colors: List[str] = []
@@ -81,6 +117,41 @@ def _as_list(value: Any) -> list[Any]:
 	if isinstance(value, list):
 		return value
 	return []
+
+
+_MD_IMAGE_RE = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
+
+# URL path fragments that indicate non-product images
+_JUNK_PATTERNS = re.compile(
+	r"(?:logo|icon|sprite|badge|flag|arrow|chevron|banner|social|facebook|twitter|instagram|pinterest|youtube|spacer|pixel|tracking|1x1)",
+	re.IGNORECASE,
+)
+
+
+def _extract_images_from_markdown(markdown: str) -> list[str]:
+	"""Extract image URLs from markdown ![alt](url) syntax.
+
+	Returns a list of URL strings, filtering out logos, icons, SVGs,
+	data URIs, and tiny tracking pixels.
+	"""
+	urls = _MD_IMAGE_RE.findall(markdown)
+	results: list[str] = []
+	seen: set[str] = set()
+	for url in urls:
+		url = url.strip()
+		# Skip data URIs, SVGs, and obviously non-product images
+		if url.startswith("data:"):
+			continue
+		if url.endswith(".svg"):
+			continue
+		if _JUNK_PATTERNS.search(url):
+			continue
+		if url in seen:
+			continue
+		seen.add(url)
+		results.append(url)
+	logger.info("[firecrawl] _extract_images_from_markdown found %d images (from %d raw matches)", len(results), len(urls))
+	return results
 
 
 def _pick_logo_url(

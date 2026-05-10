@@ -102,6 +102,7 @@ async def direct_agent(thread_id: str, request: DirectionRequest):
         {
             "plan": updated_state.get("plan"),
             "user_directions": updated_state.get("user_directions", []),
+            "shots": updated_state.get("shots", []),
             "status_messages": updated_state.get("status_messages", []),
             "error": updated_state.get("error"),
         },
