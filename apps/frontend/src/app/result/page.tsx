@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import Link from "next/link";
 import { getState, type StatusMessage } from "@/lib/api";
 
 const TYPE_COLOR: Record<string, string> = {
@@ -18,7 +19,7 @@ const TYPE_ICON: Record<string, string> = {
 function Nav() {
   return (
     <nav className="rw-nav">
-      <span className="rw-nav-logo">Reelwright</span>
+      <Link href="/" className="rw-nav-logo" style={{ textDecoration: "none", color: "inherit" }}>Reelwright</Link>
       <div className="rw-steps">
         <span>1. URL</span><span className="sep">›</span>
         <span>2. Review</span><span className="sep">›</span>

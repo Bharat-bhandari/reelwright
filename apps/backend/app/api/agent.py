@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import datetime, timezone
 from uuid import uuid4
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
@@ -12,7 +13,8 @@ from sse_starlette.sse import EventSourceResponse
 from app.graph.graph import graph
 from app.graph.nodes import apply_direction_node
 from app.graph.state import AgentState
-from app.graph.status import subscribe, unsubscribe
+from app.graph.status import publish, subscribe, unsubscribe
+from app.models.schemas import ScrapeData, VideoPlan
 
 router = APIRouter()
 
@@ -27,6 +29,15 @@ class ResumeRequest(BaseModel):
 
 class DirectionRequest(BaseModel):
     direction: str
+
+
+class DeleteImageRequest(BaseModel):
+    image_url: str
+
+
+class RegenerateShotRequest(BaseModel):
+    shot_index: int
+    instruction: str
 
 
 async def _run_graph_until_interrupt_or_end(thread_id: str, initial_state: AgentState | None) -> None:
@@ -120,6 +131,151 @@ async def direct_agent(thread_id: str, request: DirectionRequest):
         "thread_id": thread_id,
         "plan": jsonable_encoder(updated_state.get("plan")),
         "status_messages": jsonable_encoder(updated_state.get("status_messages", [])),
+    }
+
+
+@router.post("/edit-scrape/{thread_id}/delete-image")
+async def delete_scrape_image(thread_id: str, request: DeleteImageRequest):
+    """Remove a single image URL from state.scrape.product_images.
+
+    Only valid when graph is paused at the plan_node interrupt
+    (i.e., scrape is done, user is reviewing before planning).
+    """
+    config = {"configurable": {"thread_id": thread_id}}
+    snapshot = await graph.aget_state(config)
+    if snapshot.values is None:
+        raise HTTPException(404, "Thread not found")
+
+    # Guard: only allow editing scrape before plan_node runs
+    if "plan_node" not in snapshot.next:
+        raise HTTPException(
+            409,
+            f"Cannot edit scrape — graph is past the scrape review interrupt (next={list(snapshot.next)})",
+        )
+
+    scrape = snapshot.values.get("scrape")
+    if not scrape:
+        raise HTTPException(409, "No scrape data to edit")
+
+    # ScrapeData is a Pydantic model — convert to dict, mutate, validate back
+    scrape_dict = scrape.model_dump() if hasattr(scrape, "model_dump") else dict(scrape)
+    original_count = len(scrape_dict.get("product_images", []))
+    scrape_dict["product_images"] = [
+        url for url in scrape_dict.get("product_images", [])
+        if url != request.image_url
+    ]
+    new_count = len(scrape_dict["product_images"])
+
+    if new_count == original_count:
+        raise HTTPException(404, "Image URL not found in product_images")
+
+    updated_scrape = ScrapeData.model_validate(scrape_dict)
+
+    msg = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "type": "scrape",
+        "message": f"Removed 1 image ({original_count} → {new_count} remaining)",
+    }
+    publish(thread_id, msg)
+
+    current_messages = snapshot.values.get("status_messages", [])
+    await graph.aupdate_state(config, {
+        "scrape": updated_scrape,
+        "status_messages": current_messages + [msg],
+    })
+
+    return {
+        "thread_id": thread_id,
+        "product_images": updated_scrape.product_images,
+        "remaining_count": new_count,
+    }
+
+
+@router.post("/regenerate-shot-prompt/{thread_id}")
+async def regenerate_shot_prompt(thread_id: str, request: RegenerateShotRequest):
+    """Regenerate a single shot's prompts via LLM, based on user instruction.
+
+    Only valid when graph is paused at the generate_shot_node interrupt
+    (i.e., plan is done, user is reviewing before generation).
+    """
+    config = {"configurable": {"thread_id": thread_id}}
+    snapshot = await graph.aget_state(config)
+    if snapshot.values is None:
+        raise HTTPException(404, "Thread not found")
+
+    # Guard: only allow regeneration before generate_shot_node runs
+    if "generate_shot_node" not in snapshot.next:
+        raise HTTPException(
+            409,
+            f"Cannot regenerate shot prompt — graph is past the plan review interrupt (next={list(snapshot.next)})",
+        )
+
+    plan = snapshot.values.get("plan")
+    shots_state = snapshot.values.get("shots", [])
+
+    if not plan:
+        raise HTTPException(409, "No plan available to edit")
+
+    plan_dict = plan.model_dump() if hasattr(plan, "model_dump") else dict(plan)
+    plan_shots = plan_dict.get("shots", [])
+
+    target_plan_shot = next(
+        (s for s in plan_shots if s.get("index") == request.shot_index),
+        None,
+    )
+    if not target_plan_shot:
+        raise HTTPException(404, f"Shot {request.shot_index} not found in plan")
+
+    from app.services.groq import regenerate_shot_prompts
+
+    scrape = snapshot.values.get("scrape")
+    revised = await regenerate_shot_prompts(
+        shot=target_plan_shot,
+        instruction=request.instruction,
+        scrape_data=scrape,
+    )
+
+    for s in plan_shots:
+        if s.get("index") == request.shot_index:
+            s["description"] = revised["description"]
+            s["image_prompt"] = revised["image_prompt"]
+            s["motion_prompt"] = revised["motion_prompt"]
+            break
+
+    updated_plan = VideoPlan.model_validate(plan_dict)
+
+    updated_shots = []
+    for s in shots_state:
+        if s.get("index") == request.shot_index:
+            updated_shots.append({
+                **s,
+                "description": revised["description"],
+                "image_prompt": revised["image_prompt"],
+                "motion_prompt": revised["motion_prompt"],
+            })
+        else:
+            updated_shots.append(s)
+
+    msg = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "type": "plan",
+        "message": f"Revised shot {request.shot_index} prompts: {request.instruction[:60]}",
+    }
+    publish(thread_id, msg)
+
+    current_messages = snapshot.values.get("status_messages", [])
+    await graph.aupdate_state(config, {
+        "plan": updated_plan,
+        "shots": updated_shots,
+        "status_messages": current_messages + [msg],
+    })
+
+    return {
+        "thread_id": thread_id,
+        "shot_index": request.shot_index,
+        "description": revised["description"],
+        "image_prompt": revised["image_prompt"],
+        "motion_prompt": revised["motion_prompt"],
     }
 
 

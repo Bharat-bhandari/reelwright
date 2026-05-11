@@ -95,10 +95,7 @@ export async function fetchHealth(): Promise<HealthResponse> {
 
 // ─── Core helpers ─────────────────────────────────────────────────────────────
 
-async function apiFetch<T>(
-  path: string,
-  init?: RequestInit,
-): Promise<T> {
+async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     headers: { "Content-Type": "application/json" },
     ...init,
@@ -123,9 +120,7 @@ export async function runAgent(
 }
 
 /** GET /agent/state/{thread_id} */
-export async function getState(
-  threadId: string,
-): Promise<AgentStateSnapshot> {
+export async function getState(threadId: string): Promise<AgentStateSnapshot> {
   return apiFetch(`/agent/state/${threadId}`);
 }
 
@@ -151,6 +146,39 @@ export async function directAgent(
   });
 }
 
+/** POST /agent/edit-scrape/{thread_id}/delete-image — remove a product image */
+export async function deleteScrapeImage(
+  threadId: string,
+  imageUrl: string,
+): Promise<{
+  thread_id: string;
+  product_images: string[];
+  remaining_count: number;
+}> {
+  return apiFetch(`/agent/edit-scrape/${threadId}/delete-image`, {
+    method: "POST",
+    body: JSON.stringify({ image_url: imageUrl }),
+  });
+}
+
+/** POST /agent/regenerate-shot-prompt/{thread_id} — revise a single shot via LLM */
+export async function regenerateShotPrompt(
+  threadId: string,
+  shotIndex: number,
+  instruction: string,
+): Promise<{
+  thread_id: string;
+  shot_index: number;
+  description: string;
+  image_prompt: string;
+  motion_prompt: string;
+}> {
+  return apiFetch(`/agent/regenerate-shot-prompt/${threadId}`, {
+    method: "POST",
+    body: JSON.stringify({ shot_index: shotIndex, instruction }),
+  });
+}
+
 // ─── SSE stream ───────────────────────────────────────────────────────────────
 
 /**
@@ -170,27 +198,37 @@ function parseSSEData(raw: string): Record<string, unknown> | null {
   // Fast path: valid JSON
   try {
     return JSON.parse(raw) as Record<string, unknown>;
-  } catch { /* fall through */ }
+  } catch {
+    /* fall through */
+  }
 
   // Robust Python-repr extractor for known field shapes.
   // We extract each field value by grabbing everything between the key's
   // opening quote and the next unescaped closing quote before a ,/} boundary.
   function extractField(src: string, key: string): string | null {
     // Match: 'key': 'value'  OR  "key": "value"
-    const re = new RegExp(`['"]${key}['"]\\s*:\\s*['"]([\\s\\S]*?)['"](?=[,}])`, "");
+    const re = new RegExp(
+      `['"]${key}['"]\\s*:\\s*['"]([\\s\\S]*?)['"](?=[,}])`,
+      "",
+    );
     const m = src.match(re);
     return m ? m[1] : null;
   }
 
   const obj: Record<string, unknown> = {};
-  for (const key of ["timestamp", "type", "message", "error", "final_video_url"]) {
+  for (const key of [
+    "timestamp",
+    "type",
+    "message",
+    "error",
+    "final_video_url",
+  ]) {
     const val = extractField(raw, key);
     if (val !== null) obj[key] = val;
   }
 
   return Object.keys(obj).length > 0 ? obj : null;
 }
-
 
 export interface StreamHandlers {
   onStatus: (msg: StatusMessage) => void;

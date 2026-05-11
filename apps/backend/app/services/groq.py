@@ -13,8 +13,8 @@ from app.models.schemas import CritiqueResult, ScrapeData, VideoPlan
 logger = logging.getLogger(__name__)
 
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
-# DEFAULT_MODEL = "llama-3.3-70b-versatile"
-DEFAULT_MODEL = "llama-3.1-8b-instant"
+DEFAULT_MODEL = "llama-3.3-70b-versatile"
+# DEFAULT_MODEL = "llama-3.1-8b-instant"
 
 
 def _get_api_key() -> str:
@@ -270,3 +270,80 @@ async def apply_direction(
 
 	data = _extract_json_object(content)
 	return VideoPlan.model_validate(data)
+
+
+async def regenerate_shot_prompts(
+	shot: dict[str, Any],
+	instruction: str,
+	*,
+	scrape_data: Optional[ScrapeData] = None,
+	model: Optional[str] = None,
+) -> dict[str, str]:
+	"""Revise a single shot's prompts based on a user instruction.
+
+	Returns a dict with keys: description, image_prompt, motion_prompt.
+	Preserves the product subject — only modifies visual treatment, framing,
+	lighting, motion, or mood per the user's direction.
+	"""
+	if not instruction or not instruction.strip():
+		raise ValueError("instruction is required")
+
+	shot_schema = {
+		"description": "string — one-sentence visual description",
+		"image_prompt": "string — self-contained image generation prompt",
+		"motion_prompt": "string — short camera motion instruction",
+	}
+
+	product_context = ""
+	if scrape_data:
+		product_context = (
+			f"\n\nProduct context (preserve subject across revision):\n"
+			f"Brand: {scrape_data.brand_name or 'Unknown'}\n"
+			f"Source: {scrape_data.source_url}\n"
+		)
+		if scrape_data.copy_blocks:
+			product_context += f"Product details: {' | '.join(scrape_data.copy_blocks[:3])}\n"
+
+	system = (
+		"You are a creative director revising a single shot in a product video plan. "
+		"Return ONLY valid JSON matching the schema — no markdown fences, no extra keys. "
+		"Apply the user's instruction to modify the shot's visual treatment. "
+		"CRITICAL: Keep the same product subject — only change the visual treatment "
+		"(framing, lighting, mood, motion, background, composition). Do NOT change the product itself. "
+		"Each prompt must remain self-contained and production-ready for an image/video model. "
+		"The image_prompt must specify framing, lighting, background, texture, and aspect ratio (9:16 vertical)."
+	)
+
+	user = (
+		f"Revise this shot per the user's instruction.\n\n"
+		f"Current shot:\n"
+		f"  description: {shot.get('description', '')}\n"
+		f"  image_prompt: {shot.get('image_prompt', '')}\n"
+		f"  motion_prompt: {shot.get('motion_prompt', '')}\n\n"
+		f"User instruction: {instruction}"
+		f"{product_context}\n\n"
+		f"Return ONLY JSON matching this schema:\n{json.dumps(shot_schema, indent=2)}"
+	)
+
+	content = await _chat_completion(
+		model=_get_model(model),
+		messages=[
+			{"role": "system", "content": system},
+			{"role": "user", "content": user},
+		],
+		temperature=0.6,
+		max_tokens=800,
+	)
+
+	data = _extract_json_object(content)
+
+	for key in ("description", "image_prompt", "motion_prompt"):
+		val = data.get(key)
+		if not isinstance(val, str) or not val.strip():
+			raise ValueError(f"Groq response missing or empty field: {key}")
+
+	return {
+		"description": data["description"].strip(),
+		"image_prompt": data["image_prompt"].strip(),
+		"motion_prompt": data["motion_prompt"].strip(),
+	}

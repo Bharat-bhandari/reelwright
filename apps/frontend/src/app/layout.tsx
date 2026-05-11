@@ -15,7 +15,14 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "Reelwright — AI video ad generator",
   description:
-    "Reelwright turns any D2C product URL into a 9:16 short-form video ad using an AI agent powered by Runway Gen-4 and Groq.",
+    "Reelwright turns any D2C product URL into a 9:16 short-form video ad using an AI-powered agent — end to end in minutes.",
+  icons: {
+    icon: [
+      { url: "/favicon.ico", sizes: "any" },
+      { url: "/icon.png", type: "image/png", sizes: "512x512" },
+    ],
+    apple: "/icon.png",
+  },
 };
 
 export const viewport: Viewport = {
