@@ -3,14 +3,15 @@ from __future__ import annotations
 import shutil
 import subprocess
 import tempfile
+import os
 from pathlib import Path
 from typing import Optional, Sequence
 
 
 def _ensure_ffmpeg() -> str:
-	ffmpeg_path = shutil.which("ffmpeg")
+	ffmpeg_path = os.getenv("FFMPEG_PATH") or shutil.which("ffmpeg")
 	if not ffmpeg_path:
-		raise RuntimeError("ffmpeg is not available on PATH")
+		raise RuntimeError("ffmpeg is not available on PATH and FFMPEG_PATH is not set")
 	return ffmpeg_path
 
 
