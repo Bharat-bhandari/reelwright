@@ -4,10 +4,14 @@ services:
       context: ./apps/backend
     environment:
       GROQ_API_KEY: ${GROQ_API_KEY}
+      FIRECRAWL_API_KEY: ${FIRECRAWL_API_KEY}
+      RUNWAY_API_KEY: ${RUNWAY_API_KEY}
+      RUNWAYML_API_KEY: ${RUNWAYML_API_KEY}
       HOST: 0.0.0.0
       PORT: 8084
       RELOAD: "false"
       CORS_ORIGINS: ${CORS_ORIGINS}
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL}
     ports:
       - "127.0.0.1:8084:8084"
     restart: unless-stopped
